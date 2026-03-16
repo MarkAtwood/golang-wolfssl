@@ -13,45 +13,60 @@ int
 _goboringcrypto_gosha1(void *p, size_t n, void *out)
 {
 	GO_SHA_CTX ctx;
-	_goboringcrypto_SHA1_Init(&ctx);
-	return _goboringcrypto_SHA1_Update(&ctx, p, n) &&
+	ctx.internal = 0;
+	if (!_goboringcrypto_SHA1_Init(&ctx)) return 0;
+	int ok = _goboringcrypto_SHA1_Update(&ctx, p, n) &&
 		_goboringcrypto_SHA1_Final(out, &ctx);
+	_goboringcrypto_SHA1_Cleanup(&ctx);
+	return ok;
 }
 
 int
 _goboringcrypto_gosha224(void *p, size_t n, void *out)
 {
 	GO_SHA256_CTX ctx;
-	_goboringcrypto_SHA224_Init(&ctx);
-	return _goboringcrypto_SHA224_Update(&ctx, p, n) &&
+	ctx.internal = 0;
+	if (!_goboringcrypto_SHA224_Init(&ctx)) return 0;
+	int ok = _goboringcrypto_SHA224_Update(&ctx, p, n) &&
 		_goboringcrypto_SHA224_Final(out, &ctx);
+	_goboringcrypto_SHA256_Cleanup(&ctx);
+	return ok;
 }
 
 int
 _goboringcrypto_gosha256(void *p, size_t n, void *out)
 {
 	GO_SHA256_CTX ctx;
-	_goboringcrypto_SHA256_Init(&ctx);
-	return _goboringcrypto_SHA256_Update(&ctx, p, n) &&
+	ctx.internal = 0;
+	if (!_goboringcrypto_SHA256_Init(&ctx)) return 0;
+	int ok = _goboringcrypto_SHA256_Update(&ctx, p, n) &&
 		_goboringcrypto_SHA256_Final(out, &ctx);
+	_goboringcrypto_SHA256_Cleanup(&ctx);
+	return ok;
 }
 
 int
 _goboringcrypto_gosha384(void *p, size_t n, void *out)
 {
 	GO_SHA512_CTX ctx;
-	_goboringcrypto_SHA384_Init(&ctx);
-	return _goboringcrypto_SHA384_Update(&ctx, p, n) &&
+	ctx.internal = 0;
+	if (!_goboringcrypto_SHA384_Init(&ctx)) return 0;
+	int ok = _goboringcrypto_SHA384_Update(&ctx, p, n) &&
 		_goboringcrypto_SHA384_Final(out, &ctx);
+	_goboringcrypto_SHA512_Cleanup(&ctx);
+	return ok;
 }
 
 int
 _goboringcrypto_gosha512(void *p, size_t n, void *out)
 {
 	GO_SHA512_CTX ctx;
-	_goboringcrypto_SHA512_Init(&ctx);
-	return _goboringcrypto_SHA512_Update(&ctx, p, n) &&
+	ctx.internal = 0;
+	if (!_goboringcrypto_SHA512_Init(&ctx)) return 0;
+	int ok = _goboringcrypto_SHA512_Update(&ctx, p, n) &&
 		_goboringcrypto_SHA512_Final(out, &ctx);
+	_goboringcrypto_SHA512_Cleanup(&ctx);
+	return ok;
 }
 
 */
@@ -60,6 +75,7 @@ import (
 	"errors"
 	"hash"
 	"internal/byteorder"
+	"runtime"
 	"unsafe"
 )
 
@@ -112,6 +128,7 @@ func SHA512(p []byte) (sum [64]byte) {
 func NewSHA1() hash.Hash {
 	h := new(sha1Hash)
 	h.Reset()
+	runtime.SetFinalizer(h, (*sha1Hash).finalize)
 	return h
 }
 
@@ -120,11 +137,8 @@ type sha1Hash struct {
 	out [20]byte
 }
 
-type sha1Ctx struct {
-	h      [5]uint32
-	nl, nh uint32
-	x      [64]byte
-	nx     uint32
+func (h *sha1Hash) finalize() {
+	C._goboringcrypto_SHA1_Cleanup(&h.ctx)
 }
 
 func (h *sha1Hash) noescapeCtx() *C.GO_SHA_CTX {
@@ -132,6 +146,7 @@ func (h *sha1Hash) noescapeCtx() *C.GO_SHA_CTX {
 }
 
 func (h *sha1Hash) Reset() {
+	C._goboringcrypto_SHA1_Cleanup(&h.ctx)
 	C._goboringcrypto_SHA1_Init(h.noescapeCtx())
 }
 
@@ -143,14 +158,18 @@ func (h *sha1Hash) Write(p []byte) (int, error) {
 	if len(p) > 0 && C._goboringcrypto_SHA1_Update(h.noescapeCtx(), unsafe.Pointer(&*addr(p)), C.size_t(len(p))) == 0 {
 		panic("boringcrypto: SHA1_Update failed")
 	}
+	runtime.KeepAlive(h)
 	return len(p), nil
 }
 
 func (h0 *sha1Hash) sum(dst []byte) []byte {
-	h := *h0 // make copy so future Write+Sum is valid
+	var h sha1Hash
+	C._goboringcrypto_SHA1_Copy(&h.ctx, &h0.ctx)
 	if C._goboringcrypto_SHA1_Final((*C.uint8_t)(noescape(unsafe.Pointer(&h.out[0]))), h.noescapeCtx()) == 0 {
 		panic("boringcrypto: SHA1_Final failed")
 	}
+	C._goboringcrypto_SHA1_Cleanup(&h.ctx)
+	runtime.KeepAlive(h0)
 	return append(dst, h.out[:]...)
 }
 
@@ -164,16 +183,23 @@ func (h *sha1Hash) MarshalBinary() ([]byte, error) {
 }
 
 func (h *sha1Hash) AppendBinary(b []byte) ([]byte, error) {
-	d := (*sha1Ctx)(unsafe.Pointer(&h.ctx))
+	var hh [5]C.uint32_t
+	var x [64]C.uint8_t
+	var nx, nl, nh C.uint32_t
+	C._goboringcrypto_SHA1_get_state(&h.ctx, &hh[0], &x[0], &nx, &nl, &nh)
+	runtime.KeepAlive(h)
 	b = append(b, sha1Magic...)
-	b = byteorder.BEAppendUint32(b, d.h[0])
-	b = byteorder.BEAppendUint32(b, d.h[1])
-	b = byteorder.BEAppendUint32(b, d.h[2])
-	b = byteorder.BEAppendUint32(b, d.h[3])
-	b = byteorder.BEAppendUint32(b, d.h[4])
-	b = append(b, d.x[:d.nx]...)
-	b = append(b, make([]byte, len(d.x)-int(d.nx))...)
-	b = byteorder.BEAppendUint64(b, uint64(d.nl)>>3|uint64(d.nh)<<29)
+	for i := 0; i < 5; i++ {
+		b = byteorder.BEAppendUint32(b, uint32(hh[i]))
+	}
+	buf := make([]byte, 64)
+	for i := 0; i < 64; i++ {
+		buf[i] = byte(x[i])
+	}
+	b = append(b, buf[:nx]...)
+	b = append(b, make([]byte, 64-int(nx))...)
+	// WolfSSL stores byte count in loLen/hiLen (not bit count like BoringSSL)
+	b = byteorder.BEAppendUint64(b, uint64(nl)|uint64(nh)<<32)
 	return b, nil
 }
 
@@ -184,18 +210,23 @@ func (h *sha1Hash) UnmarshalBinary(b []byte) error {
 	if len(b) != sha1MarshaledSize {
 		return errors.New("crypto/sha1: invalid hash state size")
 	}
-	d := (*sha1Ctx)(unsafe.Pointer(&h.ctx))
 	b = b[len(sha1Magic):]
-	b, d.h[0] = consumeUint32(b)
-	b, d.h[1] = consumeUint32(b)
-	b, d.h[2] = consumeUint32(b)
-	b, d.h[3] = consumeUint32(b)
-	b, d.h[4] = consumeUint32(b)
-	b = b[copy(d.x[:], b):]
-	b, n := consumeUint64(b)
-	d.nl = uint32(n << 3)
-	d.nh = uint32(n >> 29)
-	d.nx = uint32(n) % 64
+	var hh [5]C.uint32_t
+	var x [64]C.uint8_t
+	for i := 0; i < 5; i++ {
+		b, hh[i] = b[4:], C.uint32_t(byteorder.BEUint32(b))
+	}
+	for i := 0; i < 64; i++ {
+		x[i] = C.uint8_t(b[i])
+	}
+	b = b[64:]
+	n := byteorder.BEUint64(b)
+	// WolfSSL stores byte count directly (not bit count)
+	nl := C.uint32_t(n)
+	nh := C.uint32_t(n >> 32)
+	nx := C.uint32_t(uint32(n) % 64)
+	C._goboringcrypto_SHA1_set_state(&h.ctx, &hh[0], &x[0], nx, nl, nh)
+	runtime.KeepAlive(h)
 	return nil
 }
 
@@ -203,6 +234,7 @@ func (h *sha1Hash) UnmarshalBinary(b []byte) error {
 func NewSHA224() hash.Hash {
 	h := new(sha224Hash)
 	h.Reset()
+	runtime.SetFinalizer(h, (*sha224Hash).finalize)
 	return h
 }
 
@@ -211,11 +243,16 @@ type sha224Hash struct {
 	out [224 / 8]byte
 }
 
+func (h *sha224Hash) finalize() {
+	C._goboringcrypto_SHA256_Cleanup(&h.ctx)
+}
+
 func (h *sha224Hash) noescapeCtx() *C.GO_SHA256_CTX {
 	return (*C.GO_SHA256_CTX)(noescape(unsafe.Pointer(&h.ctx)))
 }
 
 func (h *sha224Hash) Reset() {
+	C._goboringcrypto_SHA256_Cleanup(&h.ctx)
 	C._goboringcrypto_SHA224_Init(h.noescapeCtx())
 }
 func (h *sha224Hash) Size() int             { return 224 / 8 }
@@ -226,14 +263,18 @@ func (h *sha224Hash) Write(p []byte) (int, error) {
 	if len(p) > 0 && C._goboringcrypto_SHA224_Update(h.noescapeCtx(), unsafe.Pointer(&*addr(p)), C.size_t(len(p))) == 0 {
 		panic("boringcrypto: SHA224_Update failed")
 	}
+	runtime.KeepAlive(h)
 	return len(p), nil
 }
 
 func (h0 *sha224Hash) sum(dst []byte) []byte {
-	h := *h0 // make copy so future Write+Sum is valid
+	var h sha224Hash
+	C._goboringcrypto_SHA224_Copy(&h.ctx, &h0.ctx)
 	if C._goboringcrypto_SHA224_Final((*C.uint8_t)(noescape(unsafe.Pointer(&h.out[0]))), h.noescapeCtx()) == 0 {
 		panic("boringcrypto: SHA224_Final failed")
 	}
+	C._goboringcrypto_SHA256_Cleanup(&h.ctx)
+	runtime.KeepAlive(h0)
 	return append(dst, h.out[:]...)
 }
 
@@ -241,6 +282,7 @@ func (h0 *sha224Hash) sum(dst []byte) []byte {
 func NewSHA256() hash.Hash {
 	h := new(sha256Hash)
 	h.Reset()
+	runtime.SetFinalizer(h, (*sha256Hash).finalize)
 	return h
 }
 
@@ -249,11 +291,16 @@ type sha256Hash struct {
 	out [256 / 8]byte
 }
 
+func (h *sha256Hash) finalize() {
+	C._goboringcrypto_SHA256_Cleanup(&h.ctx)
+}
+
 func (h *sha256Hash) noescapeCtx() *C.GO_SHA256_CTX {
 	return (*C.GO_SHA256_CTX)(noescape(unsafe.Pointer(&h.ctx)))
 }
 
 func (h *sha256Hash) Reset() {
+	C._goboringcrypto_SHA256_Cleanup(&h.ctx)
 	C._goboringcrypto_SHA256_Init(h.noescapeCtx())
 }
 func (h *sha256Hash) Size() int             { return 256 / 8 }
@@ -264,14 +311,18 @@ func (h *sha256Hash) Write(p []byte) (int, error) {
 	if len(p) > 0 && C._goboringcrypto_SHA256_Update(h.noescapeCtx(), unsafe.Pointer(&*addr(p)), C.size_t(len(p))) == 0 {
 		panic("boringcrypto: SHA256_Update failed")
 	}
+	runtime.KeepAlive(h)
 	return len(p), nil
 }
 
 func (h0 *sha256Hash) sum(dst []byte) []byte {
-	h := *h0 // make copy so future Write+Sum is valid
+	var h sha256Hash
+	C._goboringcrypto_SHA256_Copy(&h.ctx, &h0.ctx)
 	if C._goboringcrypto_SHA256_Final((*C.uint8_t)(noescape(unsafe.Pointer(&h.out[0]))), h.noescapeCtx()) == 0 {
 		panic("boringcrypto: SHA256_Final failed")
 	}
+	C._goboringcrypto_SHA256_Cleanup(&h.ctx)
+	runtime.KeepAlive(h0)
 	return append(dst, h.out[:]...)
 }
 
@@ -281,11 +332,30 @@ const (
 	marshaledSize256 = len(magic256) + 8*4 + 64 + 8
 )
 
-type sha256Ctx struct {
-	h      [8]uint32
-	nl, nh uint32
-	x      [64]byte
-	nx     uint32
+func sha256GetState(ctx *C.GO_SHA256_CTX) (h [8]uint32, x [64]byte, nx, nl, nh uint32) {
+	var ch [8]C.uint32_t
+	var cx [64]C.uint8_t
+	var cnx, cnl, cnh C.uint32_t
+	C._goboringcrypto_SHA256_get_state(ctx, &ch[0], &cx[0], &cnx, &cnl, &cnh)
+	for i := 0; i < 8; i++ {
+		h[i] = uint32(ch[i])
+	}
+	for i := 0; i < 64; i++ {
+		x[i] = byte(cx[i])
+	}
+	return h, x, uint32(cnx), uint32(cnl), uint32(cnh)
+}
+
+func sha256SetState(ctx *C.GO_SHA256_CTX, h [8]uint32, x [64]byte, nx, nl, nh uint32) {
+	var ch [8]C.uint32_t
+	var cx [64]C.uint8_t
+	for i := 0; i < 8; i++ {
+		ch[i] = C.uint32_t(h[i])
+	}
+	for i := 0; i < 64; i++ {
+		cx[i] = C.uint8_t(x[i])
+	}
+	C._goboringcrypto_SHA256_set_state(ctx, &ch[0], &cx[0], C.uint32_t(nx), C.uint32_t(nl), C.uint32_t(nh))
 }
 
 func (h *sha224Hash) MarshalBinary() ([]byte, error) {
@@ -293,19 +363,16 @@ func (h *sha224Hash) MarshalBinary() ([]byte, error) {
 }
 
 func (h *sha224Hash) AppendBinary(b []byte) ([]byte, error) {
-	d := (*sha256Ctx)(unsafe.Pointer(&h.ctx))
+	hh, x, nx, nl, nh := sha256GetState(&h.ctx)
+	runtime.KeepAlive(h)
 	b = append(b, magic224...)
-	b = byteorder.BEAppendUint32(b, d.h[0])
-	b = byteorder.BEAppendUint32(b, d.h[1])
-	b = byteorder.BEAppendUint32(b, d.h[2])
-	b = byteorder.BEAppendUint32(b, d.h[3])
-	b = byteorder.BEAppendUint32(b, d.h[4])
-	b = byteorder.BEAppendUint32(b, d.h[5])
-	b = byteorder.BEAppendUint32(b, d.h[6])
-	b = byteorder.BEAppendUint32(b, d.h[7])
-	b = append(b, d.x[:d.nx]...)
-	b = append(b, make([]byte, len(d.x)-int(d.nx))...)
-	b = byteorder.BEAppendUint64(b, uint64(d.nl)>>3|uint64(d.nh)<<29)
+	for i := 0; i < 8; i++ {
+		b = byteorder.BEAppendUint32(b, hh[i])
+	}
+	b = append(b, x[:nx]...)
+	b = append(b, make([]byte, 64-int(nx))...)
+	// WolfSSL stores byte count in loLen/hiLen (not bit count like BoringSSL)
+	b = byteorder.BEAppendUint64(b, uint64(nl)|uint64(nh)<<32)
 	return b, nil
 }
 
@@ -314,19 +381,16 @@ func (h *sha256Hash) MarshalBinary() ([]byte, error) {
 }
 
 func (h *sha256Hash) AppendBinary(b []byte) ([]byte, error) {
-	d := (*sha256Ctx)(unsafe.Pointer(&h.ctx))
+	hh, x, nx, nl, nh := sha256GetState(&h.ctx)
+	runtime.KeepAlive(h)
 	b = append(b, magic256...)
-	b = byteorder.BEAppendUint32(b, d.h[0])
-	b = byteorder.BEAppendUint32(b, d.h[1])
-	b = byteorder.BEAppendUint32(b, d.h[2])
-	b = byteorder.BEAppendUint32(b, d.h[3])
-	b = byteorder.BEAppendUint32(b, d.h[4])
-	b = byteorder.BEAppendUint32(b, d.h[5])
-	b = byteorder.BEAppendUint32(b, d.h[6])
-	b = byteorder.BEAppendUint32(b, d.h[7])
-	b = append(b, d.x[:d.nx]...)
-	b = append(b, make([]byte, len(d.x)-int(d.nx))...)
-	b = byteorder.BEAppendUint64(b, uint64(d.nl)>>3|uint64(d.nh)<<29)
+	for i := 0; i < 8; i++ {
+		b = byteorder.BEAppendUint32(b, hh[i])
+	}
+	b = append(b, x[:nx]...)
+	b = append(b, make([]byte, 64-int(nx))...)
+	// WolfSSL stores byte count in loLen/hiLen (not bit count like BoringSSL)
+	b = byteorder.BEAppendUint64(b, uint64(nl)|uint64(nh)<<32)
 	return b, nil
 }
 
@@ -337,21 +401,19 @@ func (h *sha224Hash) UnmarshalBinary(b []byte) error {
 	if len(b) != marshaledSize256 {
 		return errors.New("crypto/sha256: invalid hash state size")
 	}
-	d := (*sha256Ctx)(unsafe.Pointer(&h.ctx))
 	b = b[len(magic224):]
-	b, d.h[0] = consumeUint32(b)
-	b, d.h[1] = consumeUint32(b)
-	b, d.h[2] = consumeUint32(b)
-	b, d.h[3] = consumeUint32(b)
-	b, d.h[4] = consumeUint32(b)
-	b, d.h[5] = consumeUint32(b)
-	b, d.h[6] = consumeUint32(b)
-	b, d.h[7] = consumeUint32(b)
-	b = b[copy(d.x[:], b):]
-	b, n := consumeUint64(b)
-	d.nl = uint32(n << 3)
-	d.nh = uint32(n >> 29)
-	d.nx = uint32(n) % 64
+	var hh [8]uint32
+	for i := 0; i < 8; i++ {
+		b, hh[i] = consumeUint32(b)
+	}
+	var x [64]byte
+	copy(x[:], b[:64])
+	b = b[64:]
+	b2, n := consumeUint64(b)
+	_ = b2
+	// WolfSSL stores byte count directly (not bit count)
+	sha256SetState(&h.ctx, hh, x, uint32(n)%64, uint32(n), uint32(n>>32))
+	runtime.KeepAlive(h)
 	return nil
 }
 
@@ -362,21 +424,19 @@ func (h *sha256Hash) UnmarshalBinary(b []byte) error {
 	if len(b) != marshaledSize256 {
 		return errors.New("crypto/sha256: invalid hash state size")
 	}
-	d := (*sha256Ctx)(unsafe.Pointer(&h.ctx))
 	b = b[len(magic256):]
-	b, d.h[0] = consumeUint32(b)
-	b, d.h[1] = consumeUint32(b)
-	b, d.h[2] = consumeUint32(b)
-	b, d.h[3] = consumeUint32(b)
-	b, d.h[4] = consumeUint32(b)
-	b, d.h[5] = consumeUint32(b)
-	b, d.h[6] = consumeUint32(b)
-	b, d.h[7] = consumeUint32(b)
-	b = b[copy(d.x[:], b):]
-	b, n := consumeUint64(b)
-	d.nl = uint32(n << 3)
-	d.nh = uint32(n >> 29)
-	d.nx = uint32(n) % 64
+	var hh [8]uint32
+	for i := 0; i < 8; i++ {
+		b, hh[i] = consumeUint32(b)
+	}
+	var x [64]byte
+	copy(x[:], b[:64])
+	b = b[64:]
+	b2, n := consumeUint64(b)
+	_ = b2
+	// WolfSSL stores byte count directly (not bit count)
+	sha256SetState(&h.ctx, hh, x, uint32(n)%64, uint32(n), uint32(n>>32))
+	runtime.KeepAlive(h)
 	return nil
 }
 
@@ -384,6 +444,7 @@ func (h *sha256Hash) UnmarshalBinary(b []byte) error {
 func NewSHA384() hash.Hash {
 	h := new(sha384Hash)
 	h.Reset()
+	runtime.SetFinalizer(h, (*sha384Hash).finalize)
 	return h
 }
 
@@ -392,11 +453,16 @@ type sha384Hash struct {
 	out [384 / 8]byte
 }
 
+func (h *sha384Hash) finalize() {
+	C._goboringcrypto_SHA512_Cleanup(&h.ctx)
+}
+
 func (h *sha384Hash) noescapeCtx() *C.GO_SHA512_CTX {
 	return (*C.GO_SHA512_CTX)(noescape(unsafe.Pointer(&h.ctx)))
 }
 
 func (h *sha384Hash) Reset() {
+	C._goboringcrypto_SHA512_Cleanup(&h.ctx)
 	C._goboringcrypto_SHA384_Init(h.noescapeCtx())
 }
 func (h *sha384Hash) Size() int             { return 384 / 8 }
@@ -407,14 +473,18 @@ func (h *sha384Hash) Write(p []byte) (int, error) {
 	if len(p) > 0 && C._goboringcrypto_SHA384_Update(h.noescapeCtx(), unsafe.Pointer(&*addr(p)), C.size_t(len(p))) == 0 {
 		panic("boringcrypto: SHA384_Update failed")
 	}
+	runtime.KeepAlive(h)
 	return len(p), nil
 }
 
 func (h0 *sha384Hash) sum(dst []byte) []byte {
-	h := *h0 // make copy so future Write+Sum is valid
+	var h sha384Hash
+	C._goboringcrypto_SHA384_Copy(&h.ctx, &h0.ctx)
 	if C._goboringcrypto_SHA384_Final((*C.uint8_t)(noescape(unsafe.Pointer(&h.out[0]))), h.noescapeCtx()) == 0 {
 		panic("boringcrypto: SHA384_Final failed")
 	}
+	C._goboringcrypto_SHA512_Cleanup(&h.ctx)
+	runtime.KeepAlive(h0)
 	return append(dst, h.out[:]...)
 }
 
@@ -422,6 +492,7 @@ func (h0 *sha384Hash) sum(dst []byte) []byte {
 func NewSHA512() hash.Hash {
 	h := new(sha512Hash)
 	h.Reset()
+	runtime.SetFinalizer(h, (*sha512Hash).finalize)
 	return h
 }
 
@@ -430,11 +501,16 @@ type sha512Hash struct {
 	out [512 / 8]byte
 }
 
+func (h *sha512Hash) finalize() {
+	C._goboringcrypto_SHA512_Cleanup(&h.ctx)
+}
+
 func (h *sha512Hash) noescapeCtx() *C.GO_SHA512_CTX {
 	return (*C.GO_SHA512_CTX)(noescape(unsafe.Pointer(&h.ctx)))
 }
 
 func (h *sha512Hash) Reset() {
+	C._goboringcrypto_SHA512_Cleanup(&h.ctx)
 	C._goboringcrypto_SHA512_Init(h.noescapeCtx())
 }
 func (h *sha512Hash) Size() int             { return 512 / 8 }
@@ -445,22 +521,19 @@ func (h *sha512Hash) Write(p []byte) (int, error) {
 	if len(p) > 0 && C._goboringcrypto_SHA512_Update(h.noescapeCtx(), unsafe.Pointer(&*addr(p)), C.size_t(len(p))) == 0 {
 		panic("boringcrypto: SHA512_Update failed")
 	}
+	runtime.KeepAlive(h)
 	return len(p), nil
 }
 
 func (h0 *sha512Hash) sum(dst []byte) []byte {
-	h := *h0 // make copy so future Write+Sum is valid
+	var h sha512Hash
+	C._goboringcrypto_SHA512_Copy(&h.ctx, &h0.ctx)
 	if C._goboringcrypto_SHA512_Final((*C.uint8_t)(noescape(unsafe.Pointer(&h.out[0]))), h.noescapeCtx()) == 0 {
 		panic("boringcrypto: SHA512_Final failed")
 	}
+	C._goboringcrypto_SHA512_Cleanup(&h.ctx)
+	runtime.KeepAlive(h0)
 	return append(dst, h.out[:]...)
-}
-
-type sha512Ctx struct {
-	h      [8]uint64
-	nl, nh uint64
-	x      [128]byte
-	nx     uint32
 }
 
 const (
@@ -471,24 +544,48 @@ const (
 	marshaledSize512 = len(magic512) + 8*8 + 128 + 8
 )
 
+func sha512GetState(ctx *C.GO_SHA512_CTX) (h [8]uint64, x [128]byte, nx uint32, nl, nh uint64) {
+	var ch [8]C.uint64_t
+	var cx [128]C.uint8_t
+	var cnx C.uint32_t
+	var cnl, cnh C.uint64_t
+	C._goboringcrypto_SHA512_get_state(ctx, &ch[0], &cx[0], &cnx, &cnl, &cnh)
+	for i := 0; i < 8; i++ {
+		h[i] = uint64(ch[i])
+	}
+	for i := 0; i < 128; i++ {
+		x[i] = byte(cx[i])
+	}
+	return h, x, uint32(cnx), uint64(cnl), uint64(cnh)
+}
+
+func sha512SetState(ctx *C.GO_SHA512_CTX, h [8]uint64, x [128]byte, nx uint32, nl, nh uint64) {
+	var ch [8]C.uint64_t
+	var cx [128]C.uint8_t
+	for i := 0; i < 8; i++ {
+		ch[i] = C.uint64_t(h[i])
+	}
+	for i := 0; i < 128; i++ {
+		cx[i] = C.uint8_t(x[i])
+	}
+	C._goboringcrypto_SHA512_set_state(ctx, &ch[0], &cx[0], C.uint32_t(nx), C.uint64_t(nl), C.uint64_t(nh))
+}
+
 func (h *sha384Hash) MarshalBinary() ([]byte, error) {
 	return h.AppendBinary(make([]byte, 0, marshaledSize512))
 }
 
 func (h *sha384Hash) AppendBinary(b []byte) ([]byte, error) {
-	d := (*sha512Ctx)(unsafe.Pointer(&h.ctx))
+	hh, x, nx, nl, nh := sha512GetState(&h.ctx)
+	runtime.KeepAlive(h)
 	b = append(b, magic384...)
-	b = byteorder.BEAppendUint64(b, d.h[0])
-	b = byteorder.BEAppendUint64(b, d.h[1])
-	b = byteorder.BEAppendUint64(b, d.h[2])
-	b = byteorder.BEAppendUint64(b, d.h[3])
-	b = byteorder.BEAppendUint64(b, d.h[4])
-	b = byteorder.BEAppendUint64(b, d.h[5])
-	b = byteorder.BEAppendUint64(b, d.h[6])
-	b = byteorder.BEAppendUint64(b, d.h[7])
-	b = append(b, d.x[:d.nx]...)
-	b = append(b, make([]byte, len(d.x)-int(d.nx))...)
-	b = byteorder.BEAppendUint64(b, d.nl>>3|d.nh<<61)
+	for i := 0; i < 8; i++ {
+		b = byteorder.BEAppendUint64(b, hh[i])
+	}
+	b = append(b, x[:nx]...)
+	b = append(b, make([]byte, 128-int(nx))...)
+	// WolfSSL stores byte count in loLen/hiLen (not bit count like BoringSSL)
+	b = byteorder.BEAppendUint64(b, nl|nh<<32)
 	return b, nil
 }
 
@@ -497,19 +594,16 @@ func (h *sha512Hash) MarshalBinary() ([]byte, error) {
 }
 
 func (h *sha512Hash) AppendBinary(b []byte) ([]byte, error) {
-	d := (*sha512Ctx)(unsafe.Pointer(&h.ctx))
+	hh, x, nx, nl, nh := sha512GetState(&h.ctx)
+	runtime.KeepAlive(h)
 	b = append(b, magic512...)
-	b = byteorder.BEAppendUint64(b, d.h[0])
-	b = byteorder.BEAppendUint64(b, d.h[1])
-	b = byteorder.BEAppendUint64(b, d.h[2])
-	b = byteorder.BEAppendUint64(b, d.h[3])
-	b = byteorder.BEAppendUint64(b, d.h[4])
-	b = byteorder.BEAppendUint64(b, d.h[5])
-	b = byteorder.BEAppendUint64(b, d.h[6])
-	b = byteorder.BEAppendUint64(b, d.h[7])
-	b = append(b, d.x[:d.nx]...)
-	b = append(b, make([]byte, len(d.x)-int(d.nx))...)
-	b = byteorder.BEAppendUint64(b, d.nl>>3|d.nh<<61)
+	for i := 0; i < 8; i++ {
+		b = byteorder.BEAppendUint64(b, hh[i])
+	}
+	b = append(b, x[:nx]...)
+	b = append(b, make([]byte, 128-int(nx))...)
+	// WolfSSL stores byte count in loLen/hiLen (not bit count like BoringSSL)
+	b = byteorder.BEAppendUint64(b, nl|nh<<32)
 	return b, nil
 }
 
@@ -523,21 +617,19 @@ func (h *sha384Hash) UnmarshalBinary(b []byte) error {
 	if len(b) != marshaledSize512 {
 		return errors.New("crypto/sha512: invalid hash state size")
 	}
-	d := (*sha512Ctx)(unsafe.Pointer(&h.ctx))
 	b = b[len(magic512):]
-	b, d.h[0] = consumeUint64(b)
-	b, d.h[1] = consumeUint64(b)
-	b, d.h[2] = consumeUint64(b)
-	b, d.h[3] = consumeUint64(b)
-	b, d.h[4] = consumeUint64(b)
-	b, d.h[5] = consumeUint64(b)
-	b, d.h[6] = consumeUint64(b)
-	b, d.h[7] = consumeUint64(b)
-	b = b[copy(d.x[:], b):]
-	b, n := consumeUint64(b)
-	d.nl = n << 3
-	d.nh = n >> 61
-	d.nx = uint32(n) % 128
+	var hh [8]uint64
+	for i := 0; i < 8; i++ {
+		b, hh[i] = consumeUint64(b)
+	}
+	var x [128]byte
+	copy(x[:], b[:128])
+	b = b[128:]
+	b2, n := consumeUint64(b)
+	_ = b2
+	// WolfSSL stores byte count directly (not bit count)
+	sha512SetState(&h.ctx, hh, x, uint32(n)%128, n, 0)
+	runtime.KeepAlive(h)
 	return nil
 }
 
@@ -551,21 +643,19 @@ func (h *sha512Hash) UnmarshalBinary(b []byte) error {
 	if len(b) != marshaledSize512 {
 		return errors.New("crypto/sha512: invalid hash state size")
 	}
-	d := (*sha512Ctx)(unsafe.Pointer(&h.ctx))
 	b = b[len(magic512):]
-	b, d.h[0] = consumeUint64(b)
-	b, d.h[1] = consumeUint64(b)
-	b, d.h[2] = consumeUint64(b)
-	b, d.h[3] = consumeUint64(b)
-	b, d.h[4] = consumeUint64(b)
-	b, d.h[5] = consumeUint64(b)
-	b, d.h[6] = consumeUint64(b)
-	b, d.h[7] = consumeUint64(b)
-	b = b[copy(d.x[:], b):]
-	b, n := consumeUint64(b)
-	d.nl = n << 3
-	d.nh = n >> 61
-	d.nx = uint32(n) % 128
+	var hh [8]uint64
+	for i := 0; i < 8; i++ {
+		b, hh[i] = consumeUint64(b)
+	}
+	var x [128]byte
+	copy(x[:], b[:128])
+	b = b[128:]
+	b2, n := consumeUint64(b)
+	_ = b2
+	// WolfSSL stores byte count directly (not bit count)
+	sha512SetState(&h.ctx, hh, x, uint32(n)%128, n, 0)
+	runtime.KeepAlive(h)
 	return nil
 }
 

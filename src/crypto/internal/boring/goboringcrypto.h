@@ -1,39 +1,23 @@
-// Copyright 2017 The Go Authors. All rights reserved.
+// Copyright 2024 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// This header file describes the BoringCrypto ABI as built for use in Go.
-// The BoringCrypto build for Go (which generates goboringcrypto_*.syso)
-// takes the standard libcrypto.a from BoringCrypto and adds the prefix
-// _goboringcrypto_ to every symbol, to avoid possible conflicts with
-// code wrapping a different BoringCrypto or OpenSSL.
-//
-// To make this header standalone (so that building Go does not require
-// having a full set of BoringCrypto headers), the struct details are not here.
-// Instead, while building the syso, we compile and run a C++ program
-// that checks that the sizes match. The program also checks (during compilation)
-// that all the function prototypes match the BoringCrypto equivalents.
-// The generation of the checking program depends on the declaration
-// forms used below (one line for most, multiline for enums).
+// This header file describes the WolfSSL-backed crypto ABI as built for use in Go.
+// It is a drop-in replacement for goboringcrypto.h, providing the same
+// _goboringcrypto_* function prototypes with WolfSSL as the backend.
 
 #include <stdlib.h> // size_t
 #include <stdint.h> // uint8_t
 
-// This symbol is hidden in BoringCrypto and marked as a constructor,
-// but cmd/link's internal linking mode doesn't handle constructors.
-// Until it does, we've exported the symbol and can call it explicitly.
-// (If using external linking mode, it will therefore be called twice,
-// once explicitly and once as a constructor, but that's OK.)
+// === Initialization / FIPS ===
 /*unchecked*/ void _goboringcrypto_BORINGSSL_bcm_power_on_self_test(void);
-
-// #include <openssl/crypto.h>
 int _goboringcrypto_FIPS_mode(void);
 void* _goboringcrypto_OPENSSL_malloc(size_t);
 
-// #include <openssl/rand.h>
+// === RAND ===
 int _goboringcrypto_RAND_bytes(uint8_t*, size_t);
 
-// #include <openssl/nid.h>
+// === NIDs ===
 enum {
 	GO_NID_md5_sha1 = 114,
 
@@ -48,13 +32,17 @@ enum {
 	GO_NID_sha512 = 674,
 };
 
-// #include <openssl/sha.h>
-typedef struct GO_SHA_CTX { char data[96]; } GO_SHA_CTX;
+// === SHA ===
+// Sizes must be >= WolfSSL's wc_Sha*/wc_Sha256/wc_Sha512 struct sizes.
+// wc_Sha=104, wc_Sha256=128, wc_Sha512=224 on Linux x86_64.
+// We use void* internal (heap-allocated) to avoid struct layout coupling.
+// Use uintptr_t instead of void* to avoid cgo "Go pointer to unpinned Go pointer" checks
+typedef struct GO_SHA_CTX { uintptr_t internal; } GO_SHA_CTX;
 int _goboringcrypto_SHA1_Init(GO_SHA_CTX*);
 int _goboringcrypto_SHA1_Update(GO_SHA_CTX*, const void*, size_t);
 int _goboringcrypto_SHA1_Final(uint8_t*, GO_SHA_CTX*);
 
-typedef struct GO_SHA256_CTX { char data[48+64]; } GO_SHA256_CTX;
+typedef struct GO_SHA256_CTX { uintptr_t internal; } GO_SHA256_CTX;
 int _goboringcrypto_SHA224_Init(GO_SHA256_CTX*);
 int _goboringcrypto_SHA224_Update(GO_SHA256_CTX*, const void*, size_t);
 int _goboringcrypto_SHA224_Final(uint8_t*, GO_SHA256_CTX*);
@@ -62,7 +50,7 @@ int _goboringcrypto_SHA256_Init(GO_SHA256_CTX*);
 int _goboringcrypto_SHA256_Update(GO_SHA256_CTX*, const void*, size_t);
 int _goboringcrypto_SHA256_Final(uint8_t*, GO_SHA256_CTX*);
 
-typedef struct GO_SHA512_CTX { char data[88+128]; } GO_SHA512_CTX;
+typedef struct GO_SHA512_CTX { uintptr_t internal; } GO_SHA512_CTX;
 int _goboringcrypto_SHA384_Init(GO_SHA512_CTX*);
 int _goboringcrypto_SHA384_Update(GO_SHA512_CTX*, const void*, size_t);
 int _goboringcrypto_SHA384_Final(uint8_t*, GO_SHA512_CTX*);
@@ -70,7 +58,30 @@ int _goboringcrypto_SHA512_Init(GO_SHA512_CTX*);
 int _goboringcrypto_SHA512_Update(GO_SHA512_CTX*, const void*, size_t);
 int _goboringcrypto_SHA512_Final(uint8_t*, GO_SHA512_CTX*);
 
-// #include <openssl/digest.h>
+// SHA context copy (for Go's sum() method)
+int _goboringcrypto_SHA1_Copy(GO_SHA_CTX* dst, const GO_SHA_CTX* src);
+int _goboringcrypto_SHA256_Copy(GO_SHA256_CTX* dst, const GO_SHA256_CTX* src);
+int _goboringcrypto_SHA224_Copy(GO_SHA256_CTX* dst, const GO_SHA256_CTX* src);
+int _goboringcrypto_SHA384_Copy(GO_SHA512_CTX* dst, const GO_SHA512_CTX* src);
+int _goboringcrypto_SHA512_Copy(GO_SHA512_CTX* dst, const GO_SHA512_CTX* src);
+
+// SHA context cleanup
+void _goboringcrypto_SHA1_Cleanup(GO_SHA_CTX*);
+void _goboringcrypto_SHA256_Cleanup(GO_SHA256_CTX*);
+void _goboringcrypto_SHA512_Cleanup(GO_SHA512_CTX*);
+
+// SHA state access for Marshal/Unmarshal
+// SHA-1: 5 uint32 digest, 64 byte buffer, uint32 buffLen, uint32 loLen, uint32 hiLen
+int _goboringcrypto_SHA1_get_state(const GO_SHA_CTX*, uint32_t* h, uint8_t* x, uint32_t* nx, uint32_t* nl, uint32_t* nh);
+int _goboringcrypto_SHA1_set_state(GO_SHA_CTX*, const uint32_t* h, const uint8_t* x, uint32_t nx, uint32_t nl, uint32_t nh);
+// SHA-256/224: 8 uint32 digest, 64 byte buffer, uint32 buffLen, uint32 loLen, uint32 hiLen
+int _goboringcrypto_SHA256_get_state(const GO_SHA256_CTX*, uint32_t* h, uint8_t* x, uint32_t* nx, uint32_t* nl, uint32_t* nh);
+int _goboringcrypto_SHA256_set_state(GO_SHA256_CTX*, const uint32_t* h, const uint8_t* x, uint32_t nx, uint32_t nl, uint32_t nh);
+// SHA-512/384: 8 uint64 digest, 128 byte buffer, uint32 buffLen, uint64 loLen, uint64 hiLen
+int _goboringcrypto_SHA512_get_state(const GO_SHA512_CTX*, uint64_t* h, uint8_t* x, uint32_t* nx, uint64_t* nl, uint64_t* nh);
+int _goboringcrypto_SHA512_set_state(GO_SHA512_CTX*, const uint64_t* h, const uint8_t* x, uint32_t nx, uint64_t nl, uint64_t nh);
+
+// === EVP_MD ===
 /*unchecked (opaque)*/ typedef struct GO_EVP_MD { char data[1]; } GO_EVP_MD;
 const GO_EVP_MD* _goboringcrypto_EVP_md4(void);
 const GO_EVP_MD* _goboringcrypto_EVP_md5(void);
@@ -83,8 +94,8 @@ const GO_EVP_MD* _goboringcrypto_EVP_sha512(void);
 int _goboringcrypto_EVP_MD_type(const GO_EVP_MD*);
 size_t _goboringcrypto_EVP_MD_size(const GO_EVP_MD*);
 
-// #include <openssl/hmac.h>
-typedef struct GO_HMAC_CTX { char data[104]; } GO_HMAC_CTX;
+// === HMAC ===
+typedef struct GO_HMAC_CTX { uintptr_t internal; } GO_HMAC_CTX;
 void _goboringcrypto_HMAC_CTX_init(GO_HMAC_CTX*);
 void _goboringcrypto_HMAC_CTX_cleanup(GO_HMAC_CTX*);
 int _goboringcrypto_HMAC_Init(GO_HMAC_CTX*, const void*, int, const GO_EVP_MD*);
@@ -93,8 +104,8 @@ int _goboringcrypto_HMAC_Final(GO_HMAC_CTX*, uint8_t*, unsigned int*);
 size_t _goboringcrypto_HMAC_size(const GO_HMAC_CTX*);
 int _goboringcrypto_HMAC_CTX_copy_ex(GO_HMAC_CTX *dest, const GO_HMAC_CTX *src);
 
-// #include <openssl/aes.h>
-typedef struct GO_AES_KEY { char data[244]; } GO_AES_KEY;
+// === AES ===
+typedef struct GO_AES_KEY { uintptr_t internal; } GO_AES_KEY;
 int _goboringcrypto_AES_set_encrypt_key(const uint8_t*, unsigned int, GO_AES_KEY*);
 int _goboringcrypto_AES_set_decrypt_key(const uint8_t*, unsigned int, GO_AES_KEY*);
 void _goboringcrypto_AES_encrypt(const uint8_t*, uint8_t*, const GO_AES_KEY*);
@@ -106,7 +117,10 @@ enum {
 };
 void _goboringcrypto_AES_cbc_encrypt(const uint8_t*, uint8_t*, size_t, const GO_AES_KEY*, uint8_t*, const int);
 
-// #include <openssl/aead.h>
+// AES key cleanup
+void _goboringcrypto_AES_KEY_cleanup(GO_AES_KEY*);
+
+// === AEAD (AES-GCM) ===
 /*unchecked (opaque)*/ typedef struct GO_EVP_AEAD { char data[1]; } GO_EVP_AEAD;
 /*unchecked (opaque)*/ typedef struct GO_ENGINE { char data[1]; } GO_ENGINE;
 const GO_EVP_AEAD* _goboringcrypto_EVP_aead_aes_128_gcm(void);
@@ -118,7 +132,7 @@ size_t _goboringcrypto_EVP_AEAD_key_length(const GO_EVP_AEAD*);
 size_t _goboringcrypto_EVP_AEAD_nonce_length(const GO_EVP_AEAD*);
 size_t _goboringcrypto_EVP_AEAD_max_overhead(const GO_EVP_AEAD*);
 size_t _goboringcrypto_EVP_AEAD_max_tag_len(const GO_EVP_AEAD*);
-typedef struct GO_EVP_AEAD_CTX { char data[600]; } GO_EVP_AEAD_CTX;
+typedef struct GO_EVP_AEAD_CTX { uintptr_t internal; } GO_EVP_AEAD_CTX;
 void _goboringcrypto_EVP_AEAD_CTX_zero(GO_EVP_AEAD_CTX*);
 int _goboringcrypto_EVP_AEAD_CTX_init(GO_EVP_AEAD_CTX*, const GO_EVP_AEAD*, const uint8_t*, size_t, size_t, GO_ENGINE*);
 void _goboringcrypto_EVP_AEAD_CTX_cleanup(GO_EVP_AEAD_CTX*);
@@ -134,9 +148,9 @@ enum go_evp_aead_direction_t {
 };
 int _goboringcrypto_EVP_AEAD_CTX_init_with_direction(GO_EVP_AEAD_CTX*, const GO_EVP_AEAD*, const uint8_t*, size_t, size_t, enum go_evp_aead_direction_t);
 
-// #include <openssl/bn.h>
+// === BIGNUM ===
 /*unchecked (opaque)*/ typedef struct GO_BN_CTX { char data[1]; } GO_BN_CTX;
-typedef struct GO_BIGNUM { char data[24]; } GO_BIGNUM;
+/*unchecked (opaque)*/ typedef struct GO_BIGNUM { char data[1]; } GO_BIGNUM;
 GO_BIGNUM* _goboringcrypto_BN_new(void);
 void _goboringcrypto_BN_free(GO_BIGNUM*);
 unsigned _goboringcrypto_BN_num_bits(const GO_BIGNUM*);
@@ -148,7 +162,7 @@ size_t _goboringcrypto_BN_bn2bin(const GO_BIGNUM*, uint8_t*);
 int _goboringcrypto_BN_bn2le_padded(uint8_t*, size_t, const GO_BIGNUM*);
 int _goboringcrypto_BN_bn2bin_padded(uint8_t*, size_t, const GO_BIGNUM*);
 
-// #include <openssl/ec.h>
+// === EC ===
 /*unchecked (opaque)*/ typedef struct GO_EC_GROUP { char data[1]; } GO_EC_GROUP;
 GO_EC_GROUP* _goboringcrypto_EC_GROUP_new_by_curve_name(int);
 void _goboringcrypto_EC_GROUP_free(GO_EC_GROUP*);
@@ -171,7 +185,7 @@ typedef enum {
 #endif
 size_t _goboringcrypto_EC_POINT_point2oct(const GO_EC_GROUP*, const GO_EC_POINT*, go_point_conversion_form_t, uint8_t*, size_t, GO_BN_CTX*);
 
-// #include <openssl/ec_key.h>
+// === EC KEY ===
 /*unchecked (opaque)*/ typedef struct GO_EC_KEY { char data[1]; } GO_EC_KEY;
 GO_EC_KEY* _goboringcrypto_EC_KEY_new(void);
 GO_EC_KEY* _goboringcrypto_EC_KEY_new_by_curve_name(int);
@@ -183,12 +197,11 @@ int _goboringcrypto_EC_KEY_set_public_key(GO_EC_KEY*, const GO_EC_POINT*);
 int _goboringcrypto_EC_KEY_is_opaque(const GO_EC_KEY*);
 const GO_BIGNUM* _goboringcrypto_EC_KEY_get0_private_key(const GO_EC_KEY*);
 const GO_EC_POINT* _goboringcrypto_EC_KEY_get0_public_key(const GO_EC_KEY*);
-// TODO: EC_KEY_check_fips?
 
-// #include <openssl/ecdh.h>
+// === ECDH ===
 int _goboringcrypto_ECDH_compute_key_fips(uint8_t*, size_t, const GO_EC_POINT*, const GO_EC_KEY*);
 
-// #include <openssl/ecdsa.h>
+// === ECDSA ===
 typedef struct GO_ECDSA_SIG { char data[16]; } GO_ECDSA_SIG;
 GO_ECDSA_SIG* _goboringcrypto_ECDSA_SIG_new(void);
 void _goboringcrypto_ECDSA_SIG_free(GO_ECDSA_SIG*);
@@ -198,10 +211,9 @@ int _goboringcrypto_ECDSA_sign(int, const uint8_t*, size_t, uint8_t*, unsigned i
 size_t _goboringcrypto_ECDSA_size(const GO_EC_KEY*);
 int _goboringcrypto_ECDSA_verify(int, const uint8_t*, size_t, const uint8_t*, size_t, const GO_EC_KEY*);
 
-// #include <openssl/rsa.h>
-
-// Note: order of struct fields here is unchecked.
-typedef struct GO_RSA { void *meth; GO_BIGNUM *n, *e, *d, *p, *q, *dmp1, *dmq1, *iqmp; char data[168]; } GO_RSA;
+// === RSA ===
+// CRITICAL: Go code directly accesses n, e, d, p, q, dmp1, dmq1, iqmp fields!
+typedef struct GO_RSA { void *meth; GO_BIGNUM *n, *e, *d, *p, *q, *dmp1, *dmq1, *iqmp; void* internal; } GO_RSA;
 /*unchecked (opaque)*/ typedef struct GO_BN_GENCB { char data[1]; } GO_BN_GENCB;
 GO_RSA* _goboringcrypto_RSA_new(void);
 void _goboringcrypto_RSA_free(GO_RSA*);
@@ -233,7 +245,7 @@ GO_RSA* _goboringcrypto_RSA_private_key_from_bytes(const uint8_t*, size_t);
 int _goboringcrypto_RSA_public_key_to_bytes(uint8_t**, size_t*, const GO_RSA*);
 int _goboringcrypto_RSA_private_key_to_bytes(uint8_t**, size_t*, const GO_RSA*);
 
-// #include <openssl/evp.h>
+// === EVP_PKEY ===
 /*unchecked (opaque)*/ typedef struct GO_EVP_PKEY { char data[1]; } GO_EVP_PKEY;
 GO_EVP_PKEY* _goboringcrypto_EVP_PKEY_new(void);
 void _goboringcrypto_EVP_PKEY_free(GO_EVP_PKEY*);

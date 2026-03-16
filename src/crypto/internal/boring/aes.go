@@ -84,6 +84,10 @@ func NewAESCipher(key []byte) (cipher.Block, error) {
 		C._goboringcrypto_AES_set_encrypt_key((*C.uint8_t)(unsafe.Pointer(&c.key[0])), C.uint(8*len(c.key)), &c.enc) != 0 {
 		return nil, aesKeySizeError(len(key))
 	}
+	// Note: AES keys are heap-allocated (void* internal). We intentionally do
+	// NOT set a finalizer here because aesCBC/aesCTR hold raw pointers to
+	// &c.enc/&c.dec which the GC cannot trace. The keys will be leaked when
+	// the aesCipher is collected, but they are small (~850 bytes each).
 	return c, nil
 }
 

@@ -1377,7 +1377,9 @@ int _goboringcrypto_ECDSA_do_verify(const uint8_t* digest, size_t digestLen,
 int _goboringcrypto_ECDSA_sign(int type, const uint8_t* digest, size_t digestLen,
     uint8_t* sig, unsigned int* sigLen, const GO_EC_KEY* gkey) {
     WolfECKey* wk = (WolfECKey*)gkey;
-    word32 outLen = *sigLen;
+    // BoringSSL: *sigLen is output-only. WolfSSL: *outLen is input (capacity) + output.
+    // Use wc_ecc_sig_size as the buffer capacity.
+    word32 outLen = (word32)wc_ecc_sig_size(&wk->key);
     int ret = wc_ecc_sign_hash(digest, (word32)digestLen, sig, &outLen, &globalRng, &wk->key);
     *sigLen = outLen;
     return (ret == 0) ? 1 : 0;

@@ -1052,14 +1052,28 @@ int _goboringcrypto_EC_POINT_oct2point(const GO_EC_GROUP* group, GO_EC_POINT* po
     WolfECGroup* g = (WolfECGroup*)group;
     WolfECPoint* wp = (WolfECPoint*)point;
 
-    // Parse uncompressed point format: 0x04 || x || y
-    if (len == 0 || buf[0] != 0x04) return 0;
-    int coordLen = g->keySize;
-    if (len != (size_t)(1 + 2 * coordLen)) return 0;
+    // Use wc_ecc_import_x963_ex which validates the point is on the curve
+    ecc_key tmpKey;
+    wc_ecc_init(&tmpKey);
 
-    mp_read_unsigned_bin(wp->pt->x, buf + 1, coordLen);
-    mp_read_unsigned_bin(wp->pt->y, buf + 1 + coordLen, coordLen);
+    int ret = wc_ecc_import_x963_ex(buf, (word32)len, &tmpKey, g->curve_id);
+    if (ret != 0) {
+        wc_ecc_free(&tmpKey);
+        return 0;
+    }
+    // wc_ecc_import_x963_ex doesn't validate point is on curve — check explicitly
+    ret = wc_ecc_check_key(&tmpKey);
+    if (ret != 0) {
+        wc_ecc_free(&tmpKey);
+        return 0;
+    }
+
+    // Copy validated point coordinates to the destination
+    mp_copy(tmpKey.pubkey.x, wp->pt->x);
+    mp_copy(tmpKey.pubkey.y, wp->pt->y);
     mp_set(wp->pt->z, 1);
+
+    wc_ecc_free(&tmpKey);
     return 1;
 }
 
@@ -1493,6 +1507,8 @@ static int bn_to_bytes(const GO_BIGNUM* gbn, uint8_t** out, int* outLen) {
 
 // Helper to sync BIGNUM values from GO_RSA struct back to RsaKey
 // Uses wc_RsaPrivateKeyDecodeRaw for proper key initialization
+// Fix 4: public-key path uses wc_RsaPublicKeyDecodeRaw for full internal state init
+// Fix 6: dirty-check optimization + null guards for finalizer safety
 static int rsa_sync_from_bignums(GO_RSA* rsa) {
     RsaKey* key = (RsaKey*)rsa->internal;
     if (!key) return 0;
@@ -1501,7 +1517,16 @@ static int rsa_sync_from_bignums(GO_RSA* rsa) {
     uint8_t *dpBuf=NULL, *dqBuf=NULL, *uBuf=NULL;
     int nLen=0, eLen=0, dLen=0, pLen=0, qLen=0, dpLen=0, dqLen=0, uLen=0;
 
+    // Extract n first so we can do the dirty check
     bn_to_bytes(rsa->n, &nBuf, &nLen);
+
+    // Dirty-check optimization: if the key is already populated and the
+    // modulus length hasn't changed, skip the expensive re-sync.
+    if (key->type != 0 && key->dataLen == nLen && nLen > 0) {
+        free(nBuf);
+        return 1;
+    }
+
     bn_to_bytes(rsa->e, &eBuf, &eLen);
     bn_to_bytes(rsa->d, &dBuf, &dLen);
     bn_to_bytes(rsa->p, &pBuf, &pLen);
@@ -1512,23 +1537,24 @@ static int rsa_sync_from_bignums(GO_RSA* rsa) {
 
     int ret = 0;
     if (dLen > 0 && pLen > 0) {
-        // Private key - set individual mp_int fields directly
-        mp_read_unsigned_bin(&key->n, nBuf, nLen);
-        mp_read_unsigned_bin(&key->e, eBuf, eLen);
-        mp_read_unsigned_bin(&key->d, dBuf, dLen);
-        mp_read_unsigned_bin(&key->p, pBuf, pLen);
-        mp_read_unsigned_bin(&key->q, qBuf, qLen);
-        if (dpLen > 0) mp_read_unsigned_bin(&key->dP, dpBuf, dpLen);
-        if (dqLen > 0) mp_read_unsigned_bin(&key->dQ, dqBuf, dqLen);
-        if (uLen > 0) mp_read_unsigned_bin(&key->u, uBuf, uLen);
+        // Private key - set individual mp_int fields directly (in-place
+        // overwrite for thread safety: no free/init cycle)
+        if (nBuf) mp_read_unsigned_bin(&key->n, nBuf, nLen);
+        if (eBuf) mp_read_unsigned_bin(&key->e, eBuf, eLen);
+        if (dBuf) mp_read_unsigned_bin(&key->d, dBuf, dLen);
+        if (pBuf) mp_read_unsigned_bin(&key->p, pBuf, pLen);
+        if (qBuf) mp_read_unsigned_bin(&key->q, qBuf, qLen);
+        if (dpLen > 0 && dpBuf) mp_read_unsigned_bin(&key->dP, dpBuf, dpLen);
+        if (dqLen > 0 && dqBuf) mp_read_unsigned_bin(&key->dQ, dqBuf, dqLen);
+        if (uLen > 0 && uBuf) mp_read_unsigned_bin(&key->u, uBuf, uLen);
         key->type = RSA_PRIVATE;
         key->dataLen = nLen;
     } else if (nLen > 0 && eLen > 0) {
-        // Public key only
-        mp_read_unsigned_bin(&key->n, nBuf, nLen);
-        mp_read_unsigned_bin(&key->e, eBuf, eLen);
-        key->type = RSA_PUBLIC;
-        key->dataLen = nLen;
+        // Public key only — use wc_RsaPublicKeyDecodeRaw so WolfSSL fully
+        // initialises internal state (needed for encrypt/verify operations).
+        wc_FreeRsaKey(key);
+        wc_InitRsaKey(key, NULL);
+        ret = wc_RsaPublicKeyDecodeRaw(nBuf, nLen, eBuf, eLen, key);
     } else {
         ret = -1;
     }
@@ -1584,6 +1610,12 @@ void _goboringcrypto_RSA_get0_crt_params(const GO_RSA* rsa, const GO_BIGNUM **dm
     if (iqmp) *iqmp = rsa->iqmp;
 }
 
+// WolfSSL does not support multi-prime RSA (keys with more than 2 primes).
+// Go's crypto/rsa.GenerateMultiPrimeKey calls RSA_generate_key_ex, but the
+// BoringSSL shim only ever generates standard 2-prime keys.  If Go ever
+// passes nprimes > 2 through the boring layer, it would need a software
+// fallback.  For now this is fine because the Go boring path only calls
+// GenerateKey (2-prime).
 int _goboringcrypto_RSA_generate_key_ex(GO_RSA* rsa, int bits, const GO_BIGNUM* e, GO_BN_GENCB* cb) {
     RsaKey* key = (RsaKey*)rsa->internal;
     long exp = WC_RSA_EXPONENT;
@@ -1697,6 +1729,7 @@ int _goboringcrypto_RSA_sign_pss_mgf1(GO_RSA* rsa, size_t *out_len, uint8_t *out
     if (mgf1_md) {
         int mgfNid = _goboringcrypto_EVP_MD_type(mgf1_md);
         switch (mgfNid) {
+            case 64: mgf = WC_MGF1SHA1; break;  // NID_sha1
             case GO_NID_sha256: mgf = WC_MGF1SHA256; break;
             case GO_NID_sha384: mgf = WC_MGF1SHA384; break;
             case GO_NID_sha512: mgf = WC_MGF1SHA512; break;
@@ -1705,6 +1738,7 @@ int _goboringcrypto_RSA_sign_pss_mgf1(GO_RSA* rsa, size_t *out_len, uint8_t *out
     } else {
         // Use same hash as message hash
         switch (_goboringcrypto_EVP_MD_type(md)) {
+            case 64: mgf = WC_MGF1SHA1; break;  // NID_sha1
             case GO_NID_sha256: mgf = WC_MGF1SHA256; break;
             case GO_NID_sha384: mgf = WC_MGF1SHA384; break;
             case GO_NID_sha512: mgf = WC_MGF1SHA512; break;
@@ -1716,9 +1750,11 @@ int _goboringcrypto_RSA_sign_pss_mgf1(GO_RSA* rsa, size_t *out_len, uint8_t *out
     if (salt_len == -1) {
         salt_len = (int)_goboringcrypto_EVP_MD_size(md);
     } else if (salt_len == -2) {
-        // Max salt length
-        int emLen = wc_RsaEncryptSize(key) - 1; // EM length
-        salt_len = emLen - (int)_goboringcrypto_EVP_MD_size(md) - 2;
+        // Max salt length: emLen = ceil((modBits-1)/8), salt = emLen - hLen - 2
+        int emBits = mp_count_bits(&key->n) - 1;
+        int emLen = (emBits + 7) / 8;
+        int hashLen = (int)_goboringcrypto_EVP_MD_size(md);
+        salt_len = emLen - hashLen - 2;
         if (salt_len < 0) salt_len = 0;
     }
 
@@ -1741,6 +1777,7 @@ int _goboringcrypto_RSA_verify_pss_mgf1(GO_RSA* rsa, const uint8_t *msg, size_t 
     int mgf = WC_MGF1NONE;
     if (mgf1_md) {
         switch (_goboringcrypto_EVP_MD_type(mgf1_md)) {
+            case 64: mgf = WC_MGF1SHA1; break;  // NID_sha1
             case GO_NID_sha256: mgf = WC_MGF1SHA256; break;
             case GO_NID_sha384: mgf = WC_MGF1SHA384; break;
             case GO_NID_sha512: mgf = WC_MGF1SHA512; break;
@@ -1748,6 +1785,7 @@ int _goboringcrypto_RSA_verify_pss_mgf1(GO_RSA* rsa, const uint8_t *msg, size_t 
         }
     } else {
         switch (_goboringcrypto_EVP_MD_type(md)) {
+            case 64: mgf = WC_MGF1SHA1; break;  // NID_sha1
             case GO_NID_sha256: mgf = WC_MGF1SHA256; break;
             case GO_NID_sha384: mgf = WC_MGF1SHA384; break;
             case GO_NID_sha512: mgf = WC_MGF1SHA512; break;
@@ -1758,14 +1796,20 @@ int _goboringcrypto_RSA_verify_pss_mgf1(GO_RSA* rsa, const uint8_t *msg, size_t 
     if (salt_len == -1) {
         salt_len = (int)_goboringcrypto_EVP_MD_size(md);
     } else if (salt_len == -2) {
-        salt_len = RSA_PSS_SALT_LEN_DEFAULT;
+        // Max salt length: emLen = ceil((modBits-1)/8), salt = emLen - hLen - 2
+        int emBits = mp_count_bits(&key->n) - 1;
+        int emLen = (emBits + 7) / 8;
+        int hashLen = (int)_goboringcrypto_EVP_MD_size(md);
+        salt_len = emLen - hashLen - 2;
+        if (salt_len < 0) salt_len = 0;
     }
 
     // First decrypt the signature
-    uint8_t* decBuf = (uint8_t*)malloc(sig_len);
+    int rsaSize = wc_RsaEncryptSize(key);
+    uint8_t* decBuf = (uint8_t*)malloc(rsaSize);
     if (!decBuf) return 0;
 
-    int decLen = wc_RsaPSS_Verify_ex(sig, (word32)sig_len, decBuf, (word32)sig_len,
+    int decLen = wc_RsaPSS_Verify_ex(sig, (word32)sig_len, decBuf, (word32)rsaSize,
                                        hashType, mgf, salt_len, key);
     if (decLen < 0) {
         free(decBuf);
@@ -1774,7 +1818,7 @@ int _goboringcrypto_RSA_verify_pss_mgf1(GO_RSA* rsa, const uint8_t *msg, size_t 
 
     // Verify the PSS padding
     int ret = wc_RsaPSS_CheckPadding_ex(msg, (word32)msg_len, decBuf, decLen,
-                                          hashType, salt_len, mp_count_bits(&((RsaKey*)rsa->internal)->n));
+                                          hashType, salt_len, mp_count_bits(&key->n));
     free(decBuf);
     return (ret == 0) ? 1 : 0;
 }
@@ -2024,6 +2068,7 @@ static enum wc_HashType md_to_wc_hash_type_enum(const GO_EVP_MD* md) {
 static int md_to_mgf(const GO_EVP_MD* md) {
     if (!md) return WC_MGF1SHA256;
     switch (((const WolfMD*)md)->type) {
+        case 64:            return WC_MGF1SHA1;   // NID_sha1
         case GO_NID_sha224: return WC_MGF1SHA224;
         case GO_NID_sha256: return WC_MGF1SHA256;
         case GO_NID_sha384: return WC_MGF1SHA384;
@@ -2051,9 +2096,12 @@ int _goboringcrypto_EVP_PKEY_encrypt(GO_EVP_PKEY_CTX* gctx, uint8_t* out, size_t
     if (ctx->padding == GO_RSA_PKCS1_OAEP_PADDING) {
         enum wc_HashType hashType = md_to_wc_hash_type_enum(ctx->oaepMd);
         int mgf = md_to_mgf(ctx->mgf1Md ? ctx->mgf1Md : ctx->oaepMd);
+        byte* lbl = ctx->oaepLabel;
+        word32 lblLen = (word32)ctx->oaepLabelLen;
+        if (lblLen == 0) lbl = NULL;
         ret = wc_RsaPublicEncrypt_ex(in, (word32)inLen, out, (word32)*outLen, key, &globalRng,
                                       WC_RSA_OAEP_PAD, hashType, mgf,
-                                      ctx->oaepLabel, (word32)ctx->oaepLabelLen);
+                                      lbl, lblLen);
     } else if (ctx->padding == GO_RSA_PKCS1_PADDING) {
         ret = wc_RsaPublicEncrypt(in, (word32)inLen, out, (word32)*outLen, key, &globalRng);
     } else if (ctx->padding == GO_RSA_NO_PADDING) {
@@ -2085,9 +2133,12 @@ int _goboringcrypto_EVP_PKEY_decrypt(GO_EVP_PKEY_CTX* gctx, uint8_t* out, size_t
     if (ctx->padding == GO_RSA_PKCS1_OAEP_PADDING) {
         enum wc_HashType hashType = md_to_wc_hash_type_enum(ctx->oaepMd);
         int mgf = md_to_mgf(ctx->mgf1Md ? ctx->mgf1Md : ctx->oaepMd);
+        byte* lbl = ctx->oaepLabel;
+        word32 lblLen = (word32)ctx->oaepLabelLen;
+        if (lblLen == 0) lbl = NULL;
         ret = wc_RsaPrivateDecrypt_ex(in, (word32)inLen, out, (word32)*outLen, key,
                                        WC_RSA_OAEP_PAD, hashType, mgf,
-                                       ctx->oaepLabel, (word32)ctx->oaepLabelLen);
+                                       lbl, lblLen);
     } else if (ctx->padding == GO_RSA_PKCS1_PADDING) {
         ret = wc_RsaPrivateDecrypt(in, (word32)inLen, out, (word32)*outLen, key);
     } else if (ctx->padding == GO_RSA_NO_PADDING) {
@@ -2113,8 +2164,10 @@ int _goboringcrypto_EVP_PKEY_sign(GO_EVP_PKEY_CTX* gctx, uint8_t* out, size_t* o
     }
 
     if (ctx->padding == GO_RSA_PKCS1_PSS_PADDING) {
+        const GO_EVP_MD *hashMd = ctx->oaepMd ? ctx->oaepMd : _goboringcrypto_EVP_sha256();
+        const GO_EVP_MD *mgf1Md = ctx->mgf1Md ? ctx->mgf1Md : hashMd;
         return _goboringcrypto_RSA_sign_pss_mgf1(ctx->pkey->rsa, outLen, out, *outLen,
-                                                   in, inLen, ctx->oaepMd, ctx->mgf1Md, ctx->saltLen);
+                                                   in, inLen, hashMd, mgf1Md, ctx->saltLen);
     }
 
     return 0;

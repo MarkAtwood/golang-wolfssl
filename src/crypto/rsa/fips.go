@@ -76,7 +76,12 @@ func SignPSS(random io.Reader, priv *PrivateKey, hash crypto.Hash, digest []byte
 		if err != nil {
 			return nil, err
 		}
-		return boring.SignRSAPSS(bkey, hash, digest, opts.saltLength())
+		b, err := boring.SignRSAPSS(bkey, hash, digest, opts.saltLength())
+		if err == nil {
+			return b, nil
+		}
+		// boring failed (e.g. key too small for the PSS geometry); fall
+		// through to the non-boring path which returns ErrMessageTooLong.
 	}
 	boring.UnreachableExceptTests()
 
@@ -336,7 +341,12 @@ func SignPKCS1v15(random io.Reader, priv *PrivateKey, hash crypto.Hash, hashed [
 		if err != nil {
 			return nil, err
 		}
-		return boring.SignRSAPKCS1v15(bkey, hash, hashed)
+		b, err := boring.SignRSAPKCS1v15(bkey, hash, hashed)
+		if err == nil {
+			return b, nil
+		}
+		// boring failed (e.g. key too small); fall through to the non-boring
+		// path which returns ErrMessageTooLong for that case.
 	}
 
 	if err := checkFIPS140OnlyPrivateKey(priv); err != nil {

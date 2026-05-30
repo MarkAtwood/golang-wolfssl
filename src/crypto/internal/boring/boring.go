@@ -8,7 +8,7 @@ package boring
 
 /*
 // goboringcrypto_linux_amd64.syso references pthread and math functions.
-#cgo LDFLAGS: "-pthread" "-lm"
+#cgo LDFLAGS: "-pthread"
 
 #include "goboringcrypto.h"
 */

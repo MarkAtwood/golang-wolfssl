@@ -1,0 +1,11 @@
+# wolfSSL source (cloned by bootstrap.sh)
+wolfssl-src/
+
+# Compiled test binaries
+test_vectors*
+leak_check*
+verify_shim*
+testwolfcrypt*
+
+# Build artifacts
+*.o

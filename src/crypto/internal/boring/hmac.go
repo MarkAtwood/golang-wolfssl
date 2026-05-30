@@ -147,7 +147,8 @@ func (h *boringHMAC) Sum(in []byte) []byte {
 	if C._goboringcrypto_HMAC_CTX_copy_ex(&h.ctx2, &h.ctx) == 0 {
 		panic("boringcrypto: HMAC_CTX_copy_ex failed")
 	}
+	defer C._goboringcrypto_HMAC_CTX_cleanup(&h.ctx2)
 	C._goboringcrypto_HMAC_Final(&h.ctx2, (*C.uint8_t)(unsafe.Pointer(&h.sum[0])), nil)
-	C._goboringcrypto_HMAC_CTX_cleanup(&h.ctx2)
+	runtime.KeepAlive(h)
 	return append(in, h.sum...)
 }

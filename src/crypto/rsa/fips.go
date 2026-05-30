@@ -348,6 +348,7 @@ func SignPKCS1v15(random io.Reader, priv *PrivateKey, hash crypto.Hash, hashed [
 		// boring failed (e.g. key too small); fall through to the non-boring
 		// path which returns ErrMessageTooLong for that case.
 	}
+	boring.UnreachableExceptTests()
 
 	if err := checkFIPS140OnlyPrivateKey(priv); err != nil {
 		return nil, err

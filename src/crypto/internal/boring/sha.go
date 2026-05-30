@@ -148,6 +148,7 @@ func (h *sha1Hash) noescapeCtx() *C.GO_SHA_CTX {
 func (h *sha1Hash) Reset() {
 	C._goboringcrypto_SHA1_Cleanup(&h.ctx)
 	C._goboringcrypto_SHA1_Init(h.noescapeCtx())
+	runtime.KeepAlive(h)
 }
 
 func (h *sha1Hash) Size() int             { return 20 }
@@ -165,10 +166,10 @@ func (h *sha1Hash) Write(p []byte) (int, error) {
 func (h0 *sha1Hash) sum(dst []byte) []byte {
 	var h sha1Hash
 	C._goboringcrypto_SHA1_Copy(&h.ctx, &h0.ctx)
+	defer C._goboringcrypto_SHA1_Cleanup(&h.ctx)
 	if C._goboringcrypto_SHA1_Final((*C.uint8_t)(noescape(unsafe.Pointer(&h.out[0]))), h.noescapeCtx()) == 0 {
 		panic("boringcrypto: SHA1_Final failed")
 	}
-	C._goboringcrypto_SHA1_Cleanup(&h.ctx)
 	runtime.KeepAlive(h0)
 	return append(dst, h.out[:]...)
 }
@@ -254,6 +255,7 @@ func (h *sha224Hash) noescapeCtx() *C.GO_SHA256_CTX {
 func (h *sha224Hash) Reset() {
 	C._goboringcrypto_SHA256_Cleanup(&h.ctx)
 	C._goboringcrypto_SHA224_Init(h.noescapeCtx())
+	runtime.KeepAlive(h)
 }
 func (h *sha224Hash) Size() int             { return 224 / 8 }
 func (h *sha224Hash) BlockSize() int        { return 64 }
@@ -270,10 +272,10 @@ func (h *sha224Hash) Write(p []byte) (int, error) {
 func (h0 *sha224Hash) sum(dst []byte) []byte {
 	var h sha224Hash
 	C._goboringcrypto_SHA224_Copy(&h.ctx, &h0.ctx)
+	defer C._goboringcrypto_SHA256_Cleanup(&h.ctx)
 	if C._goboringcrypto_SHA224_Final((*C.uint8_t)(noescape(unsafe.Pointer(&h.out[0]))), h.noescapeCtx()) == 0 {
 		panic("boringcrypto: SHA224_Final failed")
 	}
-	C._goboringcrypto_SHA256_Cleanup(&h.ctx)
 	runtime.KeepAlive(h0)
 	return append(dst, h.out[:]...)
 }
@@ -302,6 +304,7 @@ func (h *sha256Hash) noescapeCtx() *C.GO_SHA256_CTX {
 func (h *sha256Hash) Reset() {
 	C._goboringcrypto_SHA256_Cleanup(&h.ctx)
 	C._goboringcrypto_SHA256_Init(h.noescapeCtx())
+	runtime.KeepAlive(h)
 }
 func (h *sha256Hash) Size() int             { return 256 / 8 }
 func (h *sha256Hash) BlockSize() int        { return 64 }
@@ -318,10 +321,10 @@ func (h *sha256Hash) Write(p []byte) (int, error) {
 func (h0 *sha256Hash) sum(dst []byte) []byte {
 	var h sha256Hash
 	C._goboringcrypto_SHA256_Copy(&h.ctx, &h0.ctx)
+	defer C._goboringcrypto_SHA256_Cleanup(&h.ctx)
 	if C._goboringcrypto_SHA256_Final((*C.uint8_t)(noescape(unsafe.Pointer(&h.out[0]))), h.noescapeCtx()) == 0 {
 		panic("boringcrypto: SHA256_Final failed")
 	}
-	C._goboringcrypto_SHA256_Cleanup(&h.ctx)
 	runtime.KeepAlive(h0)
 	return append(dst, h.out[:]...)
 }
@@ -464,6 +467,7 @@ func (h *sha384Hash) noescapeCtx() *C.GO_SHA512_CTX {
 func (h *sha384Hash) Reset() {
 	C._goboringcrypto_SHA512_Cleanup(&h.ctx)
 	C._goboringcrypto_SHA384_Init(h.noescapeCtx())
+	runtime.KeepAlive(h)
 }
 func (h *sha384Hash) Size() int             { return 384 / 8 }
 func (h *sha384Hash) BlockSize() int        { return 128 }
@@ -480,10 +484,10 @@ func (h *sha384Hash) Write(p []byte) (int, error) {
 func (h0 *sha384Hash) sum(dst []byte) []byte {
 	var h sha384Hash
 	C._goboringcrypto_SHA384_Copy(&h.ctx, &h0.ctx)
+	defer C._goboringcrypto_SHA512_Cleanup(&h.ctx)
 	if C._goboringcrypto_SHA384_Final((*C.uint8_t)(noescape(unsafe.Pointer(&h.out[0]))), h.noescapeCtx()) == 0 {
 		panic("boringcrypto: SHA384_Final failed")
 	}
-	C._goboringcrypto_SHA512_Cleanup(&h.ctx)
 	runtime.KeepAlive(h0)
 	return append(dst, h.out[:]...)
 }
@@ -512,6 +516,7 @@ func (h *sha512Hash) noescapeCtx() *C.GO_SHA512_CTX {
 func (h *sha512Hash) Reset() {
 	C._goboringcrypto_SHA512_Cleanup(&h.ctx)
 	C._goboringcrypto_SHA512_Init(h.noescapeCtx())
+	runtime.KeepAlive(h)
 }
 func (h *sha512Hash) Size() int             { return 512 / 8 }
 func (h *sha512Hash) BlockSize() int        { return 128 }
@@ -528,10 +533,10 @@ func (h *sha512Hash) Write(p []byte) (int, error) {
 func (h0 *sha512Hash) sum(dst []byte) []byte {
 	var h sha512Hash
 	C._goboringcrypto_SHA512_Copy(&h.ctx, &h0.ctx)
+	defer C._goboringcrypto_SHA512_Cleanup(&h.ctx)
 	if C._goboringcrypto_SHA512_Final((*C.uint8_t)(noescape(unsafe.Pointer(&h.out[0]))), h.noescapeCtx()) == 0 {
 		panic("boringcrypto: SHA512_Final failed")
 	}
-	C._goboringcrypto_SHA512_Cleanup(&h.ctx)
 	runtime.KeepAlive(h0)
 	return append(dst, h.out[:]...)
 }

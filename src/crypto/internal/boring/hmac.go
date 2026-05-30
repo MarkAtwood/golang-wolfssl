@@ -115,6 +115,7 @@ func (h *boringHMAC) Reset() {
 }
 
 func (h *boringHMAC) finalize() {
+	C._goboringcrypto_HMAC_CTX_cleanup(&h.ctx2)
 	C._goboringcrypto_HMAC_CTX_cleanup(&h.ctx)
 }
 

@@ -84,11 +84,13 @@ func NewAESCipher(key []byte) (cipher.Block, error) {
 		C._goboringcrypto_AES_set_encrypt_key((*C.uint8_t)(unsafe.Pointer(&c.key[0])), C.uint(8*len(c.key)), &c.enc) != 0 {
 		return nil, aesKeySizeError(len(key))
 	}
-	// Note: AES keys are heap-allocated (void* internal). We intentionally do
-	// NOT set a finalizer here because aesCBC/aesCTR hold raw pointers to
-	// &c.enc/&c.dec which the GC cannot trace. The keys will be leaked when
-	// the aesCipher is collected, but they are small (~850 bytes each).
+	runtime.SetFinalizer(c, (*aesCipher).finalize)
 	return c, nil
+}
+
+func (c *aesCipher) finalize() {
+	C._goboringcrypto_AES_KEY_cleanup(&c.enc)
+	C._goboringcrypto_AES_KEY_cleanup(&c.dec)
 }
 
 func (c *aesCipher) BlockSize() int { return aesBlockSize }
@@ -107,6 +109,7 @@ func (c *aesCipher) Encrypt(dst, src []byte) {
 		(*C.uint8_t)(unsafe.Pointer(&src[0])),
 		(*C.uint8_t)(unsafe.Pointer(&dst[0])),
 		&c.enc)
+	runtime.KeepAlive(c)
 }
 
 func (c *aesCipher) Decrypt(dst, src []byte) {
@@ -123,12 +126,14 @@ func (c *aesCipher) Decrypt(dst, src []byte) {
 		(*C.uint8_t)(unsafe.Pointer(&src[0])),
 		(*C.uint8_t)(unsafe.Pointer(&dst[0])),
 		&c.dec)
+	runtime.KeepAlive(c)
 }
 
 type aesCBC struct {
-	key  *C.GO_AES_KEY
-	mode C.int
-	iv   [aesBlockSize]byte
+	cipher *aesCipher
+	key    *C.GO_AES_KEY
+	mode   C.int
+	iv     [aesBlockSize]byte
 }
 
 func (x *aesCBC) BlockSize() int { return aesBlockSize }
@@ -150,6 +155,7 @@ func (x *aesCBC) CryptBlocks(dst, src []byte) {
 			C.size_t(len(src)), x.key,
 			(*C.uint8_t)(unsafe.Pointer(&x.iv[0])), x.mode)
 	}
+	runtime.KeepAlive(x.cipher)
 }
 
 func (x *aesCBC) SetIV(iv []byte) {
@@ -160,18 +166,19 @@ func (x *aesCBC) SetIV(iv []byte) {
 }
 
 func (c *aesCipher) NewCBCEncrypter(iv []byte) cipher.BlockMode {
-	x := &aesCBC{key: &c.enc, mode: C.GO_AES_ENCRYPT}
+	x := &aesCBC{cipher: c, key: &c.enc, mode: C.GO_AES_ENCRYPT}
 	copy(x.iv[:], iv)
 	return x
 }
 
 func (c *aesCipher) NewCBCDecrypter(iv []byte) cipher.BlockMode {
-	x := &aesCBC{key: &c.dec, mode: C.GO_AES_DECRYPT}
+	x := &aesCBC{cipher: c, key: &c.dec, mode: C.GO_AES_DECRYPT}
 	copy(x.iv[:], iv)
 	return x
 }
 
 type aesCTR struct {
+	cipher     *aesCipher
 	key        *C.GO_AES_KEY
 	iv         [aesBlockSize]byte
 	num        C.uint
@@ -193,10 +200,11 @@ func (x *aesCTR) XORKeyStream(dst, src []byte) {
 		(*C.uint8_t)(unsafe.Pointer(&dst[0])),
 		C.size_t(len(src)), x.key, (*C.uint8_t)(unsafe.Pointer(&x.iv[0])),
 		&x.ecount_buf[0], &x.num)
+	runtime.KeepAlive(x.cipher)
 }
 
 func (c *aesCipher) NewCTR(iv []byte) cipher.Stream {
-	x := &aesCTR{key: &c.enc}
+	x := &aesCTR{cipher: c, key: &c.enc}
 	copy(x.iv[:], iv)
 	return x
 }

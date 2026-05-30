@@ -35,13 +35,14 @@ enum {
 // === SHA ===
 // Sizes must be >= WolfSSL's wc_Sha*/wc_Sha256/wc_Sha512 struct sizes.
 // wc_Sha=104, wc_Sha256=128, wc_Sha512=224 on Linux x86_64.
-// We use void* internal (heap-allocated) to avoid struct layout coupling.
-typedef struct GO_SHA_CTX { void* internal; } GO_SHA_CTX;
+// We use uintptr_t internal (heap-allocated) to avoid struct layout coupling
+// and to prevent cgo "Go pointer to unpinned Go pointer" panics.
+typedef struct GO_SHA_CTX { uintptr_t internal; } GO_SHA_CTX;
 int _goboringcrypto_SHA1_Init(GO_SHA_CTX*);
 int _goboringcrypto_SHA1_Update(GO_SHA_CTX*, const void*, size_t);
 int _goboringcrypto_SHA1_Final(uint8_t*, GO_SHA_CTX*);
 
-typedef struct GO_SHA256_CTX { void* internal; } GO_SHA256_CTX;
+typedef struct GO_SHA256_CTX { uintptr_t internal; } GO_SHA256_CTX;
 int _goboringcrypto_SHA224_Init(GO_SHA256_CTX*);
 int _goboringcrypto_SHA224_Update(GO_SHA256_CTX*, const void*, size_t);
 int _goboringcrypto_SHA224_Final(uint8_t*, GO_SHA256_CTX*);
@@ -49,7 +50,7 @@ int _goboringcrypto_SHA256_Init(GO_SHA256_CTX*);
 int _goboringcrypto_SHA256_Update(GO_SHA256_CTX*, const void*, size_t);
 int _goboringcrypto_SHA256_Final(uint8_t*, GO_SHA256_CTX*);
 
-typedef struct GO_SHA512_CTX { void* internal; } GO_SHA512_CTX;
+typedef struct GO_SHA512_CTX { uintptr_t internal; } GO_SHA512_CTX;
 int _goboringcrypto_SHA384_Init(GO_SHA512_CTX*);
 int _goboringcrypto_SHA384_Update(GO_SHA512_CTX*, const void*, size_t);
 int _goboringcrypto_SHA384_Final(uint8_t*, GO_SHA512_CTX*);
@@ -94,7 +95,7 @@ int _goboringcrypto_EVP_MD_type(const GO_EVP_MD*);
 size_t _goboringcrypto_EVP_MD_size(const GO_EVP_MD*);
 
 // === HMAC ===
-typedef struct GO_HMAC_CTX { void* internal; } GO_HMAC_CTX;
+typedef struct GO_HMAC_CTX { uintptr_t internal; } GO_HMAC_CTX;
 void _goboringcrypto_HMAC_CTX_init(GO_HMAC_CTX*);
 void _goboringcrypto_HMAC_CTX_cleanup(GO_HMAC_CTX*);
 int _goboringcrypto_HMAC_Init(GO_HMAC_CTX*, const void*, int, const GO_EVP_MD*);
@@ -104,7 +105,7 @@ size_t _goboringcrypto_HMAC_size(const GO_HMAC_CTX*);
 int _goboringcrypto_HMAC_CTX_copy_ex(GO_HMAC_CTX *dest, const GO_HMAC_CTX *src);
 
 // === AES ===
-typedef struct GO_AES_KEY { void* internal; } GO_AES_KEY;
+typedef struct GO_AES_KEY { uintptr_t internal; } GO_AES_KEY;
 int _goboringcrypto_AES_set_encrypt_key(const uint8_t*, unsigned int, GO_AES_KEY*);
 int _goboringcrypto_AES_set_decrypt_key(const uint8_t*, unsigned int, GO_AES_KEY*);
 void _goboringcrypto_AES_encrypt(const uint8_t*, uint8_t*, const GO_AES_KEY*);
@@ -131,7 +132,7 @@ size_t _goboringcrypto_EVP_AEAD_key_length(const GO_EVP_AEAD*);
 size_t _goboringcrypto_EVP_AEAD_nonce_length(const GO_EVP_AEAD*);
 size_t _goboringcrypto_EVP_AEAD_max_overhead(const GO_EVP_AEAD*);
 size_t _goboringcrypto_EVP_AEAD_max_tag_len(const GO_EVP_AEAD*);
-typedef struct GO_EVP_AEAD_CTX { void* internal; } GO_EVP_AEAD_CTX;
+typedef struct GO_EVP_AEAD_CTX { uintptr_t internal; } GO_EVP_AEAD_CTX;
 void _goboringcrypto_EVP_AEAD_CTX_zero(GO_EVP_AEAD_CTX*);
 int _goboringcrypto_EVP_AEAD_CTX_init(GO_EVP_AEAD_CTX*, const GO_EVP_AEAD*, const uint8_t*, size_t, size_t, GO_ENGINE*);
 void _goboringcrypto_EVP_AEAD_CTX_cleanup(GO_EVP_AEAD_CTX*);

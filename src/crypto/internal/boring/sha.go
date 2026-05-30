@@ -581,7 +581,7 @@ func (h *sha384Hash) MarshalBinary() ([]byte, error) {
 }
 
 func (h *sha384Hash) AppendBinary(b []byte) ([]byte, error) {
-	hh, x, nx, nl, nh := sha512GetState(&h.ctx)
+	hh, x, nx, nl, _ := sha512GetState(&h.ctx)
 	runtime.KeepAlive(h)
 	b = append(b, magic384...)
 	for i := 0; i < 8; i++ {
@@ -589,8 +589,8 @@ func (h *sha384Hash) AppendBinary(b []byte) ([]byte, error) {
 	}
 	b = append(b, x[:nx]...)
 	b = append(b, make([]byte, 128-int(nx))...)
-	// WolfSSL stores byte count in loLen/hiLen (not bit count like BoringSSL)
-	b = byteorder.BEAppendUint64(b, nl|nh<<32)
+	// WolfSSL stores byte count in loLen (uint64), hiLen is always 0
+	b = byteorder.BEAppendUint64(b, nl)
 	return b, nil
 }
 
@@ -599,7 +599,7 @@ func (h *sha512Hash) MarshalBinary() ([]byte, error) {
 }
 
 func (h *sha512Hash) AppendBinary(b []byte) ([]byte, error) {
-	hh, x, nx, nl, nh := sha512GetState(&h.ctx)
+	hh, x, nx, nl, _ := sha512GetState(&h.ctx)
 	runtime.KeepAlive(h)
 	b = append(b, magic512...)
 	for i := 0; i < 8; i++ {
@@ -607,8 +607,8 @@ func (h *sha512Hash) AppendBinary(b []byte) ([]byte, error) {
 	}
 	b = append(b, x[:nx]...)
 	b = append(b, make([]byte, 128-int(nx))...)
-	// WolfSSL stores byte count in loLen/hiLen (not bit count like BoringSSL)
-	b = byteorder.BEAppendUint64(b, nl|nh<<32)
+	// WolfSSL stores byte count in loLen (uint64), hiLen is always 0
+	b = byteorder.BEAppendUint64(b, nl)
 	return b, nil
 }
 

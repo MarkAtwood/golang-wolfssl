@@ -121,11 +121,11 @@ The Go source code is distributed under a BSD-style license (see
 [LICENSE](LICENSE)).
 
 **wolfSSL / wolfCrypt is licensed under
-[GPLv2 or later](https://www.wolfssl.com/license/) (open source) or a
+[GPLv3](https://www.wolfssl.com/license/) (open source) or a
 commercial license.** Because the `.syso` statically links
 `libwolfssl.a`, any binary built with `GOEXPERIMENT=boringcrypto` using
-this fork incorporates wolfCrypt and is subject to the GPLv2 terms.
-This means **your resulting Go binaries must comply with GPLv2** — which
+this fork incorporates wolfCrypt and is subject to GPLv3 terms.
+This means **your resulting Go binaries must comply with GPLv3** — which
 includes providing (or offering to provide) the corresponding source
 code.
 

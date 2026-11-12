@@ -87,6 +87,13 @@ GOEXPERIMENT=boringcrypto ./bin/go test -count=1 \
 GOEXPERIMENT=boringcrypto ./bin/go test -count=1 crypto/tls
 ```
 
+The open-source wolfSSL that `bootstrap.sh` builds has no FIPS module,
+so `FIPS_mode()` returns 0 and every program built with
+`GOEXPERIMENT=boringcrypto` panics at startup with
+`boringcrypto: not in FIPS mode`, including the test binaries in steps
+4 and 5. Steps 1 to 3 still complete. Go's boringcrypto mode asserts a
+FIPS module, so steps 4 and 5 need a wolfCrypt FIPS build (below).
+
 ### Using FIPS-Validated wolfCrypt
 
 The default `bootstrap.sh` clones the open-source wolfSSL release. For

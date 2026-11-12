@@ -18,6 +18,9 @@
 #include <wolfssl/wolfcrypt/hash.h>
 #include <wolfssl/wolfcrypt/integer.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
+#ifdef HAVE_FIPS
+#include <wolfssl/wolfcrypt/fips_test.h>
+#endif
 
 #include <stdlib.h>
 #include <string.h>
@@ -103,8 +106,15 @@ void _goboringcrypto_BORINGSSL_bcm_power_on_self_test(void) {
     }
 }
 
+// 1 only when a wolfCrypt FIPS module is linked and its power-on self test
+// and DRBG continuous test have passed. A non-FIPS build returns 0, so Go's
+// boringcrypto init panics rather than run with a false FIPS claim.
 int _goboringcrypto_FIPS_mode(void) {
-    return 1; // Always report FIPS mode to satisfy Go's init check
+#ifdef HAVE_FIPS
+    return globalRngInit && wolfCrypt_GetStatus_fips() == 0;
+#else
+    return 0;
+#endif
 }
 
 void* _goboringcrypto_OPENSSL_malloc(size_t sz) {

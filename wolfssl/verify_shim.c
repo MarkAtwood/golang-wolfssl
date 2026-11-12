@@ -107,8 +107,10 @@ static void test_init(void)
     _goboringcrypto_BORINGSSL_bcm_power_on_self_test();
     TEST("1", "BORINGSSL_bcm_power_on_self_test completes without crash", 1);
 
+    /* Oracle: bootstrap.sh pins stock wolfSSL v5.9.1-stable (no HAVE_FIPS
+     * in options.h), so no FIPS module is linked and none may be claimed. */
     int mode = _goboringcrypto_FIPS_mode();
-    TEST("2", "FIPS_mode() returns 1", mode == 1);
+    TEST("2", "FIPS_mode() returns 0 over non-FIPS wolfSSL", mode == 0);
 }
 
 /* ---- T1.1.3: RAND ---------------------------------------------------------- */

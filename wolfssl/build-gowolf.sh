@@ -65,16 +65,20 @@ BUILD_DIR="$(mktemp -d)"
 trap "rm -rf '${BUILD_DIR}'" EXIT
 cd "${BUILD_DIR}"
 
-# Step 1: Compile the C shim.
+# Step 1: Compile the C shim. -x c because clang reads a .src file as a
+# linker input. The shim stores pointers in uintptr_t fields without casts,
+# which clang 16+ rejects by default; -Wno-error=int-conversion keeps the
+# pre-16 warning.
 echo "==> [1/4] Compiling gowolfcrypto.c..."
 clang -c -fPIC \
     -O2 \
     -fno-strict-aliasing \
     -Wall -Wextra -Wno-unused-parameter \
+    -Wno-error=int-conversion \
     -I "${WOLFSSL_SRC}" \
     -I "${WOLFSSL_SRC}/wolfssl" \
     -o gowolfcrypto.o \
-    "${SHIM_SRC}"
+    -x c "${SHIM_SRC}"
 
 # Step 2: Merge shim + all of libwolfssl.a into one relocatable object.
 echo "==> [2/4] Merging with libwolfssl.a..."
